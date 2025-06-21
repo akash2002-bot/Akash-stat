@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,7 +14,7 @@ if uploaded_file:
     st.success("File uploaded successfully!")
     st.dataframe(df.head())
 
-    sample_mode = st.radio("Choose Sampling Mode", ["Manual", "Automatic"])
+    sample_mode = st.radio("Choose Sampling Mode", ["Manual", "Automatic"], key="sample_mode")
 
     method = st.selectbox("Select Sampling Method", [
         "Simple Random",
@@ -37,22 +36,24 @@ if uploaded_file:
         return df.iloc[start::step][:n].reset_index(drop=True)
 
     def stratified_sample(df, n):
+        col = None
         if sample_mode == "Manual":
             col = st.text_input("Enter column for stratification")
         else:
             col = df.select_dtypes(include='object').columns[0] if len(df.select_dtypes(include='object').columns) else df.columns[0]
-        if col not in df.columns:
+        if not col or col not in df.columns:
             st.warning(f"Column '{col}' not found in data.")
             return pd.DataFrame()
         grp = df.groupby(col)
         return grp.apply(lambda x: x.sample(n=max(1,int(round(n*len(x)/len(df)))), random_state=42)).reset_index(drop=True)
 
     def cluster_sample(df, n):
+        col = None
         if sample_mode == "Manual":
             col = st.text_input("Enter column for cluster")
         else:
             col = df.select_dtypes(include='object').columns[0] if len(df.select_dtypes(include='object').columns) else df.columns[0]
-        if col not in df.columns:
+        if not col or col not in df.columns:
             st.warning(f"Column '{col}' not found in data.")
             return pd.DataFrame()
         clusters = df[col].dropna().unique()
@@ -60,42 +61,46 @@ if uploaded_file:
         return df[df[col].isin(sel)].reset_index(drop=True)
 
     def pps_sample(df, n):
-        if sample_mode == "Manual":
-            pps_col = st.selectbox("Select PPS column", df.columns)
-            mode = st.radio("Use automatic weights?", ["Yes", "No"])
-        else:
-            pps_col = df.select_dtypes(include=np.number).columns[0]
-            mode = "Yes"
-
-        if pps_col not in df.columns:
-            st.warning("Invalid PPS column.")
-            return pd.DataFrame()
-
+        col = None
         df2 = df.copy()
-        if mode == "Yes":
-            df2 = df2[df2[pps_col] > 0].copy()
-            df2['prob'] = df2[pps_col] / df2[pps_col].sum()
-        else:
-            bins = st.number_input("Number of bins", min_value=2, max_value=10, value=3)
-            labels = st.text_input("Enter labels (comma-separated)")
-            weights = st.text_input("Enter weights (comma-separated)")
-            try:
-                lbls = [l.strip() for l in labels.split(',')]
-                wts = [float(x.strip()) for x in weights.split(',')]
-                if len(lbls) != bins or len(wts) != bins:
-                    st.error("Label or weight count mismatch.")
+        if sample_mode == "Manual":
+            col = st.selectbox("Select column for PPS", df.select_dtypes(include=np.number).columns)
+            auto_weights = st.checkbox("Use automatic weights", value=True)
+
+            if not auto_weights:
+                bins = st.number_input("Number of bins", min_value=2, max_value=10, value=3)
+                labels = st.text_input("Enter labels (comma-separated)")
+                weights = st.text_input("Enter weights (comma-separated)")
+
+                if not labels or not weights:
+                    st.warning("Please enter both labels and weights.")
                     return pd.DataFrame()
-                df2['bin'] = pd.qcut(df2[pps_col], q=bins, labels=lbls)
-                wmap = dict(zip(lbls, wts))
-                df2['prob'] = df2['bin'].map(wmap)
-                df2['prob'] = df2['prob'] / df2['prob'].sum()
-            except:
-                st.error("Error in binning weights.")
-                return pd.DataFrame()
+
+                try:
+                    lbls = [l.strip() for l in labels.split(',')]
+                    wts = [float(w.strip()) for w in weights.split(',')]
+                    if len(lbls) != bins or len(wts) != bins:
+                        st.error("Label or weight count mismatch.")
+                        return pd.DataFrame()
+                    df2['bin'] = pd.qcut(df2[col], q=bins, labels=lbls)
+                    wmap = dict(zip(lbls, wts))
+                    df2['prob'] = df2['bin'].map(wmap)
+                    df2['prob'] = df2['prob'] / df2['prob'].sum()
+                except Exception as e:
+                    st.error(f"Error in binning weights: {e}")
+                    return pd.DataFrame()
+            else:
+                df2 = df2[df2[col] > 0].copy()
+                df2['prob'] = df2[col] / df2[col].sum()
+        else:
+            col = df.select_dtypes(include=np.number).columns[0]
+            df2 = df2[df2[col] > 0].copy()
+            df2['prob'] = df2[col] / df2[col].sum()
+
         try:
             return df2.sample(n=n, weights='prob', random_state=42).reset_index(drop=True)
-        except:
-            st.error("PPS sampling failed.")
+        except Exception as e:
+            st.error(f"PPS sampling failed: {e}")
             return pd.DataFrame()
 
     def preview(df_out, name):
